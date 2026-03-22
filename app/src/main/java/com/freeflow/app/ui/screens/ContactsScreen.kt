@@ -252,7 +252,7 @@ private fun ContactItem(
         )
     }
 
-    HorizontalDivider(
+    Divider(
         modifier = Modifier.padding(start = 76.dp),
         color = DarkSurfaceVariant,
         thickness = 0.5.dp
