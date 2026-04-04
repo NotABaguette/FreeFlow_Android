@@ -40,8 +40,11 @@ class FreeFlowConnection(
     var encoding: EncodingMode = EncodingMode.PROQUINT,
     var relayUrl: String = "",
     var relayApiKey: String = "",
-    var queryDelay: Long = 3000L
+    var queryDelay: Long = 3000L,
+    resolvers: List<String> = emptyList(),
+    loadBalanceStrength: Int = 5
 ) {
+    val resolverPool: ResolverPool = ResolverPool(resolvers, loadBalanceStrength)
     // Session state
     private var sessionKey: ByteArray? = null
     private var sessionId: ByteArray? = null
@@ -164,6 +167,7 @@ class FreeFlowConnection(
         sessionId = null
         seqNo = 0
         registered = false
+        resolverPool.stopHealthCheck()
         onLog?.invoke("DISCONNECT", "session destroyed", transportLabel)
     }
 
@@ -648,27 +652,40 @@ class FreeFlowConnection(
     }
 
     /**
-     * Send DNS AAAA query via UDP and receive response.
+     * Send DNS AAAA query via UDP with resolver pool load balancing.
+     * On failure, the resolver is marked unhealthy and the next one is tried.
      */
     private fun dnsQueryAAAA(name: String): List<ByteArray> {
         val query = buildDnsQuery(name)
-        val socket = DatagramSocket()
-        socket.soTimeout = 10000
+        val maxAttempts = maxOf(3, resolverPool.healthyCount())
 
-        try {
-            val address = InetAddress.getByName(resolver)
-            val sendPacket = DatagramPacket(query, query.size, address, 53)
-            socket.send(sendPacket)
+        var lastError: Exception = FreeFlowException("No resolvers available")
+        for (attempt in 0 until maxAttempts) {
+            val currentResolver = resolverPool.next()
+            try {
+                val socket = DatagramSocket()
+                socket.soTimeout = 10000
 
-            val buffer = ByteArray(4096)
-            val recvPacket = DatagramPacket(buffer, buffer.size)
-            socket.receive(recvPacket)
+                try {
+                    val address = InetAddress.getByName(currentResolver)
+                    val sendPacket = DatagramPacket(query, query.size, address, 53)
+                    socket.send(sendPacket)
 
-            val responseData = buffer.copyOfRange(0, recvPacket.length)
-            return parseDnsResponse(responseData)
-        } finally {
-            socket.close()
+                    val buffer = ByteArray(4096)
+                    val recvPacket = DatagramPacket(buffer, buffer.size)
+                    socket.receive(recvPacket)
+
+                    val responseData = buffer.copyOfRange(0, recvPacket.length)
+                    return parseDnsResponse(responseData)
+                } finally {
+                    socket.close()
+                }
+            } catch (e: Exception) {
+                lastError = e
+                resolverPool.markUnhealthy(currentResolver)
+            }
         }
+        throw lastError
     }
 
     // ========================================================================
