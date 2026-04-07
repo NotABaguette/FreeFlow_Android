@@ -1,9 +1,10 @@
 package com.freeflow.app.client
 
 import kotlinx.coroutines.*
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.Socket
+import java.security.SecureRandom
 
 /**
  * Manages a pool of DNS resolvers with round-robin rotation and periodic
@@ -134,28 +135,46 @@ class ResolverPool(
         }
     }
 
+    private val secureRandom = SecureRandom()
+
     /**
-     * Tests if a resolver is reachable using ICMP ping (InetAddress.isReachable).
-     * Falls back to TCP connect to port 53 if ICMP is blocked.
-     * This avoids sending DNS query patterns during health checks.
+     * Tests resolver reachability by sending a minimal DNS query over UDP.
+     * Conforms to DNS protocol — no ICMP, no spawned processes.
      */
     private fun probe(resolver: String): Boolean {
         return try {
-            val address = InetAddress.getByName(resolver)
-            // Try ICMP ping first (requires no special permissions on Android)
-            if (address.isReachable(3000)) {
-                return true
-            }
-            // Fallback: TCP connect to port 53
-            val socket = Socket()
+            val query = buildDNSProbe()
+            val socket = DatagramSocket()
+            socket.soTimeout = 3000
             try {
-                socket.connect(InetSocketAddress(address, 53), 3000)
-                true
+                val address = InetAddress.getByName(resolver)
+                val sendPacket = DatagramPacket(query, query.size, address, 53)
+                socket.send(sendPacket)
+                val buffer = ByteArray(512)
+                val recvPacket = DatagramPacket(buffer, buffer.size)
+                socket.receive(recvPacket)
+                recvPacket.length >= 12
             } finally {
                 socket.close()
             }
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun buildDNSProbe(): ByteArray {
+        val pkt = mutableListOf<Byte>()
+        val txid = secureRandom.nextInt(0xFFFF + 1)
+        pkt.add(((txid shr 8) and 0xFF).toByte())
+        pkt.add((txid and 0xFF).toByte())
+        pkt.add(0x01); pkt.add(0x00) // flags
+        pkt.add(0x00); pkt.add(0x01) // questions
+        repeat(6) { pkt.add(0x00) }
+        pkt.add(3); pkt.addAll("dns".toByteArray().toList())
+        pkt.add(6); pkt.addAll("google".toByteArray().toList())
+        pkt.add(0x00)
+        pkt.add(0x00); pkt.add(0x01) // A
+        pkt.add(0x00); pkt.add(0x01) // IN
+        return pkt.toByteArray()
     }
 }
