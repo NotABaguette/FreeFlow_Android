@@ -436,7 +436,7 @@ class FreeFlowConnection(
     // ========================================================================
 
     /**
-     * Fetch bulletin from Oracle.
+     * Fetch bulletin from Oracle (fragment 0 / header).
      */
     suspend fun getBulletin(lastSeenId: Int = 0): ByteArray = withContext(Dispatchers.IO) {
         val data = byteArrayOf(
@@ -448,6 +448,30 @@ class FreeFlowConnection(
         onLog?.invoke("GET_BULLETIN lastID=$lastSeenId", "sending...", transportLabel)
         val response = checkErrorResponse(queryOracle(frame))
         onLog?.invoke("GET_BULLETIN", "response=${response.size}B", transportLabel)
+        response
+    }
+
+    /**
+     * Fetch a specific fragment of a bulletin.
+     * fragIndex=0 returns the header, fragIndex=1..N returns content chunks.
+     */
+    suspend fun getBulletinFragment(lastSeenId: Int = 0, fragIndex: Int): ByteArray = withContext(Dispatchers.IO) {
+        // Data: [lastSeenID(2)][fragIndex(1)][pad(1)] — padded to even length for proquint
+        val data = byteArrayOf(
+            ((lastSeenId shr 8) and 0xFF).toByte(),
+            (lastSeenId and 0xFF).toByte(),
+            (fragIndex and 0xFF).toByte(),
+            0x00 // pad to even
+        )
+        val frame = Frame.build(
+            command = Commands.GET_BULLETIN,
+            fragIndex = fragIndex,
+            data = data
+        )
+
+        onLog?.invoke("GET_BULLETIN lastID=$lastSeenId frag=$fragIndex", "sending...", transportLabel)
+        val response = checkErrorResponse(queryOracle(frame))
+        onLog?.invoke("GET_BULLETIN frag=$fragIndex", "response=${response.size}B", transportLabel)
         response
     }
 

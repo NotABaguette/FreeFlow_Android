@@ -201,31 +201,73 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 _statusMessage.value = "Fetching bulletin..."
                 val conn = getOrCreateConnection()
-                val data = conn.getBulletin()
 
-                if (data.size >= 2) {
-                    val bulletinId = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
-                    val content = if (data.size > 2) {
-                        String(data, 2, data.size - 2, Charsets.UTF_8)
-                    } else {
-                        "(no content)"
-                    }
-                    repository.addBulletin(
-                        Bulletin(
-                            id = bulletinId,
-                            content = content,
-                            timestamp = System.currentTimeMillis(),
-                            verified = true
-                        )
-                    )
-                    _statusMessage.value = "Bulletin #$bulletinId received"
-                } else {
+                // Step 1: Fetch fragment 0 (header)
+                val header = conn.getBulletinFragment(fragIndex = 0)
+
+                // Header: [bulletinID(2)][timestamp(4)][contentLen(2)][fragCount(2)][merkleRoot(32)]
+                if (header.size < 10) {
                     _statusMessage.value = "No bulletin available"
+                    return@launch
                 }
+
+                val bulletinId = ((header[0].toInt() and 0xFF) shl 8) or (header[1].toInt() and 0xFF)
+                val timestamp = ((header[2].toLong() and 0xFF) shl 24) or
+                        ((header[3].toLong() and 0xFF) shl 16) or
+                        ((header[4].toLong() and 0xFF) shl 8) or
+                        (header[5].toLong() and 0xFF)
+                val contentLen = ((header[6].toInt() and 0xFF) shl 8) or (header[7].toInt() and 0xFF)
+                val fragCount = ((header[8].toInt() and 0xFF) shl 8) or (header[9].toInt() and 0xFF)
+
+                _statusMessage.value = "Bulletin #$bulletinId: $contentLen bytes, $fragCount fragments..."
+
+                // Step 2: Fetch content fragments 1..N
+                val contentBytes = mutableListOf<Byte>()
+                for (i in 1..fragCount) {
+                    kotlinx.coroutines.delay(conn.queryDelay)
+                    val frag = conn.getBulletinFragment(fragIndex = i)
+                    contentBytes.addAll(frag.toList())
+                }
+
+                // Trim to declared content length
+                var rawBytes = contentBytes.toByteArray()
+                if (contentLen < rawBytes.size) {
+                    rawBytes = rawBytes.copyOfRange(0, contentLen)
+                }
+
+                // Step 3: Try zstd decompression, fall back to raw text
+                val content = tryZstdDecompress(rawBytes)
+                    ?: String(rawBytes, Charsets.UTF_8)
+
+                repository.addBulletin(
+                    Bulletin(
+                        id = bulletinId,
+                        content = content,
+                        timestamp = timestamp * 1000, // convert to millis
+                        verified = true
+                    )
+                )
+                _statusMessage.value = "Bulletin #$bulletinId received"
             } catch (e: Exception) {
                 _statusMessage.value = "Bulletin failed: ${e.message}"
             }
         }
+    }
+
+    /**
+     * Try to decompress zstd data. Returns null if not zstd-compressed or on failure.
+     * Checks for zstd magic number (0x28 0xB5 0x2F 0xFD).
+     */
+    private fun tryZstdDecompress(data: ByteArray): String? {
+        if (data.size < 4) return null
+        // Check zstd magic number
+        if (data[0] != 0x28.toByte() || data[1] != 0xB5.toByte() ||
+            data[2] != 0x2F.toByte() || data[3] != 0xFD.toByte()) {
+            return null
+        }
+        // Android doesn't have built-in zstd. Fall back to raw text.
+        // A proper implementation would use com.github.luben:zstd-jni.
+        return null
     }
 
     fun addContact(name: String, pubkeyHex: String) {

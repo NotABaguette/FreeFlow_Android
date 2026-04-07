@@ -19,6 +19,19 @@ import com.freeflow.app.ui.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
+private fun parseTelegramNews(content: String): List<Pair<String, String>> {
+    return content.split(" | ").mapNotNull { part ->
+        val trimmed = part.trim()
+        if (trimmed.isEmpty()) return@mapNotNull null
+        val colonIdx = trimmed.indexOf(": ")
+        if (colonIdx in 1..39) {
+            Pair(trimmed.substring(0, colonIdx), trimmed.substring(colonIdx + 2))
+        } else {
+            Pair("", trimmed)
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BulletinsScreen(viewModel: MainViewModel) {
@@ -81,6 +94,7 @@ fun BulletinsScreen(viewModel: MainViewModel) {
                 }
             }
         } else {
+            val sorted = bulletins.sortedByDescending { it.id }
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -88,10 +102,71 @@ fun BulletinsScreen(viewModel: MainViewModel) {
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(bulletins.sortedByDescending { it.id }) { bulletin ->
+                // Latest News section
+                sorted.firstOrNull()?.let { latest ->
+                    item {
+                        Text(
+                            "Latest News",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = DarkOnSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Telegram feed from Bulletin #${latest.id}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = DarkOnSurfaceVariant
+                        )
+                    }
+                    val newsItems = parseTelegramNews(latest.content)
+                    items(newsItems) { (channel, message) ->
+                        NewsItemCard(channel = channel, message = message)
+                    }
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Divider(color = DarkOnSurfaceVariant.copy(alpha = 0.3f))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Bulletin History",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = DarkOnSurface
+                        )
+                    }
+                }
+
+                items(sorted) { bulletin ->
                     BulletinCard(bulletin)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun NewsItemCard(channel: String, message: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF1E2840)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            if (channel.isNotEmpty()) {
+                Text(
+                    text = channel,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = FreeFlowBlue
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = DarkOnSurface
+            )
         }
     }
 }
