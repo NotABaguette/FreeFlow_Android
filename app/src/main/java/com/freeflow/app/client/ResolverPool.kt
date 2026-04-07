@@ -44,7 +44,6 @@ class ResolverPool(
     private var queryCount: Int = 0
     private var _strength: Int = strength.coerceIn(1, 10)
     private var healthJob: Job? = null
-    private val secureRandom = SecureRandom()
 
     /**
      * Returns the next healthy resolver based on the round-robin rotation schedule.
